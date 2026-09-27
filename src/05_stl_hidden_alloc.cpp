@@ -111,6 +111,22 @@ int main()
         mjl_recorder_free(&r);
     }
 
+    /* 修复对照：容量在进入控制段前预留，后续序列化不再扩容。 */
+    printf("\n== preallocated serialization cost ==\n");
+    std::string preallocated;
+    preallocated.reserve(kMsgSize);
+    latency_recorder_t prealloc_rec;
+    mjl_recorder_init(&prealloc_rec, kMsgs / 10);
+    for (int i = 0; i < kMsgs / 10; ++i) {
+        const uint64_t t0 = mjl_now_ns();
+        const size_t serialized = fake_serialize_prealloc(preallocated, kMsgSize);
+        const uint64_t t1 = mjl_now_ns();
+        mjl_record(&prealloc_rec, t1 - t0);
+        if (serialized != kMsgSize) printf("unexpected serialized size\n");
+    }
+    mjl_report("  reserve+resize", &prealloc_rec);
+    mjl_recorder_free(&prealloc_rec);
+
     /* 再证明：并发存储线程会让控制线程的日志路径 P99 变差 */
     printf("\n== concurrent storage thread pollutes control path ==\n");
     pthread_t tc, ts;
