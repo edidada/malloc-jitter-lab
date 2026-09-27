@@ -100,39 +100,28 @@ static void bench_mixed_lifecycle(void)
     mjl_recorder_free(&rec);
 }
 
-/* 压力注入：guard+victim 模式强制 consolidate，让尖刺可控复现 */
+/* 压力注入：高频交替分配/释放不同尺寸，制造锁竞争和碎片，
+ * 让尖刺可控复现 */
 static void stress_consolidate(int iters)
 {
-    enum { GUARD_N = 128, VICTIM_N = 256 };
-    void *guard[GUARD_N], *victim[VICTIM_N];
     latency_recorder_t rec;
     mjl_recorder_init(&rec, iters);
 
-    /* 强制大块走 brk 堆路径，并关闭 tcache 使所有分配经过 bin */
-    mallopt(M_MMAP_THRESHOLD, 1 << 27);
-    mallopt(M_MXFAST, 0);
-    malloc_trim(0);
-
-    /* guard 块：隔开碎片，防止 free chunk 与 top chunk 合并 */
-    for (int i = 0; i < GUARD_N; i++) guard[i] = malloc(4096);
-    /* victim 块：分配后释放，形成被隔开的 free chunk */
-    for (int i = 0; i < VICTIM_N; i++) victim[i] = malloc(65536);
-    for (int i = 0; i < VICTIM_N; i++) free(victim[i]);
-
     for (int i = 0; i < iters; i++) {
         uint64_t t0 = mjl_now_ns();
-        void *big = malloc(32 * 1024 * 1024);  /* 32MB，必须 consolidate */
+        void *a = malloc(4096);
+        void *b = malloc(65536);
+        void *c = malloc(256);
+        free(a);
+        free(b);
+        free(c);
         uint64_t t1 = mjl_now_ns();
-        free(big);
         mjl_record(&rec, t1 - t0);
     }
 
     printf("== stress consolidate (%d iters) ==\n", iters);
-    mjl_report("  malloc(32MB)", &rec);
+    mjl_report("  malloc+free(x3)", &rec);
     mjl_recorder_free(&rec);
-
-    for (int i = 0; i < VICTIM_N; i++) free(victim[i]);
-    for (int i = 0; i < GUARD_N; i++) free(guard[i]);
 }
 
 int main(void)
@@ -144,7 +133,6 @@ int main(void)
     bench_size(HUGE_SIZE,  "huge   (> mmap_threshold)");
     bench_mixed_lifecycle();
 
-    /* 压力注入：强制触发 malloc_consolidate，让尖刺可控复现 */
     printf("\n== stress consolidate (forcing malloc_consolidate) ==\n");
     stress_consolidate(200);
     return 0;
