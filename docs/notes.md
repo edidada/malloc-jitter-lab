@@ -29,7 +29,8 @@
 - 复现三要素：低优持锁 + 中优抢占吃 CPU + 高优等锁。
 - `pthread_mutex` 默认 `PRIO_NONE`；修复 = `PTHREAD_PRIO_INHERIT`（对照参数 `1`）或换内存池（实验 06）。
 - glibc 的 arena 锁本身不支持优先级继承 —— 换 allocator 才是根治。
-- 运行：`sudo ./03_priority_inversion 0`（bug）vs `1`（修复）。
+- 运行：`sudo ./03_priority_inversion 0`（bug）vs `1`（修复）。第二个
+  可选参数可指定采样次数，例如 `./03_priority_inversion 0 100` 用于快速冒烟。
 
 ### 04_false_sharing（伪共享）
 - 4 个 `atomic<uint64_t>` 挤一条 cache line：本机实测 **6x+ 减速**。
@@ -48,5 +49,6 @@
 - 替换 allocator：`LD_PRELOAD=libjemalloc.so.2` / `libtcmalloc.so` 对比见 `scripts/run_all.sh`。
 
 ## 测试策略
-- 本地冒烟：`ctest --test-dir build`（6 条，各 60s 超时）。
+- 本地冒烟：`ctest --test-dir build`（6 条，各 60s 超时；02 使用 100 次
+  采样，避免三组 1ms 周期测试触及超时上限）。
 - 延迟断言（P99 < 阈值）只在独占 CI 机器上做，脚本解析输出分位数与阈值比较；共享机器上跑会因邻居噪声假失败。

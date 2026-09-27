@@ -16,7 +16,7 @@ set(EXP_NAMES
 
 set(EXP_ARGS
   ""
-  "8"
+  "100"
   "0"
   ""
   ""

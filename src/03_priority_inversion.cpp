@@ -39,6 +39,7 @@ static pthread_mutex_t g_alloc_lock;
 
 /* 锁属性：0 = 无优先级继承（默认，反转复现）；1 = PRIO_INHERIT（修复对照） */
 static int g_use_pi = 0;
+static int g_iterations = 2000;
 
 /* storage：低优先级，模拟 LiDAR mcap 写入，频繁 malloc(64KB)+free */
 static void *storage_thread(void *)
@@ -83,7 +84,7 @@ static void *control_thread(void *)
     const auto period = microseconds(1000);
     auto next = steady_clock::now();
 
-    for (int i = 0; i < 5000; ++i) {
+    for (int i = 0; i < g_iterations; ++i) {
         next += period;
         auto t0 = steady_clock::now();
         pthread_mutex_lock(&g_alloc_lock);
@@ -100,6 +101,14 @@ static void *control_thread(void *)
 int main(int argc, char **argv)
 {
     g_use_pi = (argc > 1 && atoi(argv[1]) == 1);
+    if (argc > 2) {
+        const long parsed = std::strtol(argv[2], nullptr, 10);
+        if (parsed <= 0 || parsed > 1000000) {
+            fprintf(stderr, "usage: %s [0|1 for PI] [positive iteration count]\n", argv[0]);
+            return 2;
+        }
+        g_iterations = static_cast<int>(parsed);
+    }
     printf("priority inversion demo, PI=%s\n", g_use_pi ? "ON (fix)" : "OFF (bug)");
     printf("roles: storage(SCHED_FIFO 10) | lnn(SCHED_FIFO 60) | control(SCHED_FIFO 80)\n");
 
@@ -113,7 +122,7 @@ int main(int argc, char **argv)
         pthread_mutex_init(&g_alloc_lock, nullptr);
     }
 
-    mjl_recorder_init(&g_rec, 5000);
+    mjl_recorder_init(&g_rec, g_iterations);
 
     pthread_t t_storage, t_lnn, t_control;
     pthread_create(&t_control, nullptr, control_thread, nullptr);

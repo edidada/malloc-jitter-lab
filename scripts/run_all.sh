@@ -19,8 +19,7 @@ echo "== [1/6] 01_malloc_latency: glibc malloc/free 基线 =="
 
 echo
 echo "== [2/6] 02_arena_contention: arena 锁竞争（默认 vs M_ARENA_MAX=1）=="
-"$BIN/02_arena_contention" 8
-"$BIN/02_arena_contention" 1
+"$BIN/02_arena_contention"
 
 echo
 echo "== [3/6] 03_priority_inversion: 优先级反转（PI-OFF vs PI-ON）=="

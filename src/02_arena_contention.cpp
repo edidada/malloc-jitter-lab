@@ -14,8 +14,8 @@
  *   A 组 P99 在 µs 级；B 组略升；C 组 P99 显著抬升（可能 ms 级）。
  *   若 C 组 P99 跳到 ms 级，说明 Arena 竞争是业务尖刺的根因之一。
  *
- * 运行：sudo ./build/src/02_arena_contention
- *   无需参数，三组自动顺序运行。
+ * 运行：sudo ./build/src/02_arena_contention [iterations]
+ *   三组自动顺序运行；可选 iterations 便于 CTest 快速冒烟。
  */
 #include <atomic>
 #include <chrono>
@@ -31,11 +31,12 @@
 
 using namespace std::chrono;
 
-constexpr int kIterations = 20000;
+constexpr int kDefaultIterations = 5000;
 constexpr size_t kBlockSize = 64 * 1024;
 
 static std::atomic<bool> g_stop{false};
 static latency_recorder_t g_rec_a, g_rec_b, g_rec_c;
+static int g_iterations = kDefaultIterations;
 
 /* storage 线程：高频 malloc(64KB)+free，模拟 LiDAR 存储 */
 static void *storage_thread(void *)
@@ -59,7 +60,7 @@ static void *control_thread(void *arg)
     const auto period = microseconds(1000);
     auto next = steady_clock::now();
 
-    for (int i = 0; i < kIterations; ++i) {
+    for (int i = 0; i < g_iterations; ++i) {
         next += period;
         uint64_t t0 = mjl_now_ns();
         void *p = malloc(256);
@@ -74,9 +75,9 @@ static void *control_thread(void *arg)
 static void run_group(int group_id, long arena_max)
 {
     g_stop.store(false);
-    mjl_recorder_init(&g_rec_a, kIterations);
-    mjl_recorder_init(&g_rec_b, kIterations);
-    mjl_recorder_init(&g_rec_c, kIterations);
+    mjl_recorder_init(&g_rec_a, g_iterations);
+    mjl_recorder_init(&g_rec_b, g_iterations);
+    mjl_recorder_init(&g_rec_c, g_iterations);
 
     if (mallopt(M_ARENA_MAX, (int)arena_max) == 0)
         fprintf(stderr, "[group %d] mallopt M_ARENA_MAX=%ld failed\n", group_id, arena_max);
@@ -118,11 +119,19 @@ static void run_group(int group_id, long arena_max)
     mjl_recorder_free(&g_rec_c);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc > 1) {
+        const long parsed = std::strtol(argv[1], nullptr, 10);
+        if (parsed <= 0 || parsed > 1000000) {
+            fprintf(stderr, "usage: %s [positive iteration count]\n", argv[0]);
+            return 2;
+        }
+        g_iterations = static_cast<int>(parsed);
+    }
     printf("arena contention: A/B/C comparison\n");
     printf("A = control only | B = +storage, M_ARENA_MAX=8 | C = +storage, M_ARENA_MAX=1\n");
-    printf("run as root for SCHED_FIFO effect\n\n");
+    printf("iterations/group=%d; run as root for SCHED_FIFO effect\n\n", g_iterations);
 
     run_group(1, 8);
     run_group(2, 8);

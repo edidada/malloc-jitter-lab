@@ -1,0 +1,113 @@
+== [1/6] 01_malloc_latency: glibc malloc/free 基线 ==
+glibc malloc latency baseline
+watch P99/P999 vs mean — this is 'memory jitter'
+
+== small  (tcache fast path) (256 bytes) ==
+[  malloc] n=100000  mean=17.4ns  P50=20ns  P90=20ns  P99=21ns  P999=30ns  MAX=14216ns
+[  free  ] n=100000  mean=18.8ns  P50=20ns  P90=20ns  P99=21ns  P999=30ns  MAX=51947ns
+== mid    (chunk split/coalesce) (65536 bytes) ==
+[  malloc] n=100000  mean=17.4ns  P50=20ns  P90=20ns  P99=21ns  P999=40ns  MAX=9999ns
+[  free  ] n=100000  mean=18.3ns  P50=20ns  P90=20ns  P99=21ns  P999=40ns  MAX=11943ns
+== huge   (> mmap_threshold) (4194304 bytes) ==
+[  malloc] n=1000  mean=17.7ns  P50=20ns  P90=20ns  P99=21ns  P999=101ns  MAX=120ns
+[  free  ] n=1000  mean=18.5ns  P50=20ns  P90=20ns  P99=21ns  P999=101ns  MAX=131ns
+== mixed lifecycle (resident + temp) ==
+[  malloc+free] n=100000  mean=19.9ns  P50=20ns  P90=20ns  P99=30ns  P999=40ns  MAX=137986ns
+
+== stress consolidate (forcing malloc_consolidate) ==
+== stress consolidate (200 iters) ==
+[  malloc+free(x3)] n=200  mean=17.4ns  P50=20ns  P90=20ns  P99=21ns  P999=21ns  MAX=21ns
+
+== [2/6] 02_arena_contention: arena 锁竞争（默认 vs M_ARENA_MAX=1）==
+arena contention: A/B/C comparison
+A = control only | B = +storage, M_ARENA_MAX=8 | C = +storage, M_ARENA_MAX=1
+iterations/group=5000; run as root for SCHED_FIFO effect
+
+=== A: control only ===
+[sched] set policy=1 prio=80 failed: Operation not permitted (run as root for full effect, degrading to SCHED_OTHER)
+[control (A)] n=5000
+[control (A)] n=5000  mean=54.2ns  P50=40ns  P90=120ns  P99=281ns  P999=491ns  MAX=1633ns
+
+=== B: control+storage, ARENA_MAX=8 ===
+[sched] set policy=1 prio=80 failed: Operation not permitted (run as root for full effect, degrading to SCHED_OTHER)
+[sched] set policy=1 prio=10 failed: Operation not permitted (run as root for full effect, degrading to SCHED_OTHER)
+[sched] set policy=1 prio=10 failed: Operation not permitted (run as root for full effect, degrading to SCHED_OTHER)
+[control (B)] n=5000
+[control (B)] n=5000  mean=57.9ns  P50=40ns  P90=101ns  P99=250ns  P999=460ns  MAX=34555ns
+
+=== C: control+storage, ARENA_MAX=1 ===
+[sched] set policy=1 prio=80 failed: Operation not permitted (run as root for full effect, degrading to SCHED_OTHER)
+[sched] set policy=1 prio=10 failed: Operation not permitted (run as root for full effect, degrading to SCHED_OTHER)
+[sched] set policy=1 prio=10 failed: Operation not permitted (run as root for full effect, degrading to SCHED_OTHER)
+[control (C)] n=5000
+[control (C)] n=5000  mean=51.7ns  P50=40ns  P90=60ns  P99=241ns  P999=481ns  MAX=15069ns
+
+=== summary ===
+If C >> B >> A: arena contention is the root cause of P99 spikes
+
+== [3/6] 03_priority_inversion: 优先级反转（PI-OFF vs PI-ON）==
+[sched] set policy=1 prio=80 failed: Operation not permitted (run as root for full effect, degrading to SCHED_OTHER)
+[sched] set policy=1 prio=60 failed: Operation not permitted (run as root for full effect, degrading to SCHED_OTHER)
+[sched] set policy=1 prio=10 failed: Operation not permitted (run as root for full effect, degrading to SCHED_OTHER)
+priority inversion demo, PI=OFF (bug)
+roles: storage(SCHED_FIFO 10) | lnn(SCHED_FIFO 60) | control(SCHED_FIFO 80)
+
+== control thread lock+malloc latency ==
+[ PI-OFF] n=2000  mean=8867.4ns  P50=1823ns  P90=3877ns  P99=92698ns  P999=1228527ns  MAX=3224687ns
+
+expected: PI-OFF 时 P99/P999 明显高于 PI-ON
+复现项目现象：'IO 没满、算法没变、P99 却飙升'
+[sched] set policy=1 prio=80 failed: Operation not permitted (run as root for full effect, degrading to SCHED_OTHER)
+[sched] set policy=1 prio=10 failed: Operation not permitted (run as root for full effect, degrading to SCHED_OTHER)
+[sched] set policy=1 prio=60 failed: Operation not permitted (run as root for full effect, degrading to SCHED_OTHER)
+priority inversion demo, PI=ON (fix)
+roles: storage(SCHED_FIFO 10) | lnn(SCHED_FIFO 60) | control(SCHED_FIFO 80)
+
+== control thread lock+malloc latency ==
+[ PI-ON ] n=2000  mean=4969.3ns  P50=1222ns  P90=10600ns  P99=33493ns  P999=261852ns  MAX=341101ns
+
+expected: PI-OFF 时 P99/P999 明显高于 PI-ON
+复现项目现象：'IO 没满、算法没变、P99 却飙升'
+
+== [4/6] 04_false_sharing: 伪共享 vs alignas(64) 隔离 ==
+cache line size check: sizeof(std::atomic<uint64_t>)=8, assuming 64B line on x86_64
+
+== false sharing benchmark: 4 threads x 10000000 increments ==
+  shared-line (bad)  :  90270.8 us
+  padded        (good):  18820.9 us
+  speedup: 4.80x
+
+知识点：alignas(64) 把热点数据隔离到独立 cache line，
+彻底消除 MESI 乒乓；perf c2c 可在你的项目里直接定位伪共享行。
+
+== [5/6] 05_stl_hidden_alloc: STL 隐式分配污染控制路径 ==
+== log string format cost (single thread) ==
+[  log-format] n=1000  mean=75.0ns  P50=70ns  P90=80ns  P99=310ns  P999=1102ns  MAX=6071ns
+[  log-format] n=1000  mean=46.7ns  P50=50ns  P90=51ns  P99=61ns  P999=180ns  MAX=440ns
+[  log-format] n=1000  mean=85.4ns  P50=60ns  P90=80ns  P99=150ns  P999=300ns  MAX=19908ns
+
+== concurrent storage thread pollutes control path ==
+[  ctrl-log] n=10000  mean=4112.4ns  P50=3697ns  P90=5851ns  P99=10339ns  P999=39153ns  MAX=330411ns
+
+知识点：
+ 1. std::string += / vector push_back 都可能触发 realloc。
+ 2. 控制路径上任何 STL 操作都可能是隐形 malloc。
+ 3. 修复：reserve() 预分配 + 固定容量 ring buffer，见实验 06。
+
+== [6/6] 06_memory_pool_fix: 内存池修复对照 ==
+== memory pool vs glibc malloc ==
+
+-- phase: raw glibc malloc --
+[ control] n=2000  mean=65.0ns  P50=40ns  P90=120ns  P99=280ns  P999=571ns  MAX=18394ns
+
+-- phase: thread-cache pool --
+[ control] n=2000  mean=55.5ns  P50=50ns  P90=61ns  P99=291ns  P999=571ns  MAX=671ns
+
+知识点结论：
+ 1. 每线程独享池（thread-cache）完全绕过 glibc arena 锁，无 CAS、无 ABA。
+ 2. 全局 CAS freelist 有 Treiber-stack ABA 竞态，本实验真实踩坑：
+    同一块被双重分配，memset 填充 0xEF 被当作 next 指针 → SIGSEGV。
+ 3. 生产方案：tcmalloc/jemalloc 的 thread cache，或 boost::pool。
+ 4. 别忘了：先 reserve/预分配，再进入实时控制段。
+
+全部实验完成。画图：python3 scripts/plot.py <实验输出的分位数数据>
